@@ -10,31 +10,42 @@ from telegram.ext import (
     CallbackQueryHandler,
 )
 from collections import defaultdict
+from datetime import datetime
 
-# Load bot token from .env
+# Load BOT_TOKEN from .env
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
-# Track message_id to seen users
+# Seen tracker
 seen_tracker = defaultdict(set)
 
-# Send a message with a "👀 Mark as Seen" button
+# Active user tracker
+active_users = defaultdict(dict)
+
+# Track message and add 👀 button
 async def track_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
     if not message or message.chat.type == "private":
         return
 
-    message_id = message.message_id
     chat_id = message.chat.id
+    message_id = message.message_id
+    user = message.from_user
+    user_id = user.id
+    username = user.username or user.full_name
 
+    # Track activity
+    active_users[chat_id][user_id] = (username, datetime.now())
+
+    # Add 👀 button
     button = InlineKeyboardButton("👀 Mark as Seen", callback_data=f"seen:{message_id}")
-    reply_markup = InlineKeyboardMarkup([[button]])
+    markup = InlineKeyboardMarkup([[button]])
 
     await context.bot.send_message(
         chat_id=chat_id,
         text="Tap below to mark this message as seen.",
         reply_to_message_id=message_id,
-        reply_markup=reply_markup
+        reply_markup=markup
     )
 
 # Handle button clicks
@@ -50,7 +61,22 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer("You marked this as seen.")
         await query.edit_message_text(f"👀 Seen by: {', '.join(seen_tracker[msg_id])}")
 
-# /seen <message_id>
+    elif data == "show_active":
+        chat_id = query.message.chat.id
+        users = active_users.get(chat_id, {})
+
+        if not users:
+            await query.edit_message_text("Koi active user nahi mila bhai.")
+            return
+
+        sorted_users = sorted(users.items(), key=lambda x: x[1][1], reverse=True)
+        lines = [f"🔥 Active Users:"]
+        for i, (uid, (username, last_seen)) in enumerate(sorted_users, 1):
+            lines.append(f"{i}. {username} - {last_seen.strftime('%H:%M:%S')}")
+
+        await query.edit_message_text("\n".join(lines))
+
+# /seen <msg_id> command
 async def seen_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args = context.args
     if not args:
@@ -71,11 +97,18 @@ async def seen_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(reply)
 
-# Setup app
+# /active command with button
+async def show_active_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    button = InlineKeyboardButton("📋 Show Active Users", callback_data="show_active")
+    markup = InlineKeyboardMarkup([[button]])
+    await update.message.reply_text("Tap the button below to see active users:", reply_markup=markup)
+
+# Setup bot
 app = ApplicationBuilder().token(BOT_TOKEN).build()
 app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), track_message))
 app.add_handler(CallbackQueryHandler(handle_button))
 app.add_handler(CommandHandler("seen", seen_command))
+app.add_handler(CommandHandler("active", show_active_users))
 
 if __name__ == "__main__":
     app.run_polling()
